@@ -6,27 +6,34 @@ from config import ROLE_ORDER, TARGET_GUILD_ID, LOG_CHANNEL_ID, LOGBOOK_CHANNELS
 import asyncio
 import re  
 
+# Korea Standard Time
 KST = timezone(timedelta(hours=9))
 
 
 class DailyRoleAssigner(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.last_run_date = None  # track last run date
         self.daily_task.start()
 
     def cog_unload(self):
         self.daily_task.cancel()
 
-    @tasks.loop(minutes=60)
+    @tasks.loop(minutes=1)
     async def daily_task(self):
-        """Runs once daily at 09:00 KST"""
+        """Runs once daily at 04:30 KST"""
         now_kst = datetime.now(KST)
-        if now_kst.hour != 9:
-            return
-        print("Running daily role log task...")
-        await self.assign_roles()
+        target_hour = 3
+        target_minute = 58
+
+        if now_kst.hour == target_hour and now_kst.minute == target_minute:
+            if self.last_run_date != now_kst.date():
+                print("✅ Running daily role log task...")
+                await self.assign_roles()
+                self.last_run_date = now_kst.date()
 
     async def assign_roles(self, interaction: discord.Interaction = None):
+        """Scan logbook channels and assign roles"""
         guild = self.bot.get_guild(TARGET_GUILD_ID)
         if not guild:
             print("⚠️ Target guild not found.")
@@ -42,7 +49,7 @@ class DailyRoleAssigner(commands.Cog):
             return
 
         all_mentions = []  # List of (msg, user_id)
-        print("Scanning logbook channels for mentions...")
+        print("📚 Scanning logbook channels for mentions...")
 
         for channel_id in LOGBOOK_CHANNELS:
             channel = self.bot.get_channel(channel_id)
@@ -56,6 +63,7 @@ class DailyRoleAssigner(commands.Cog):
                         print(f"🛑 Stopped scanning {channel.name} at message {msg.id} (found 👍)")
                         break
 
+                    # Use regex to catch mentions even in long messages
                     mention_tokens = re.findall(r"<@!?\d+>", msg.content or "")
                     if mention_tokens:
                         for token in mention_tokens:
@@ -76,7 +84,7 @@ class DailyRoleAssigner(commands.Cog):
         removed_rollcall_users = []
 
         for msg, user_id in all_mentions:
-            print(f"Processing mention: user_id={user_id} message_id={msg.id}")
+            print(f"🔍 Processing mention: user_id={user_id} message_id={msg.id}")
             try:
                 member = await guild.fetch_member(user_id)
             except Exception as e:
@@ -114,6 +122,8 @@ class DailyRoleAssigner(commands.Cog):
                     print(f"⚠️ Missing permission for {member.display_name}")
                 except Exception as e:
                     print(f"❌ Error assigning role to {member.display_name}: {e}")
+            else:
+                print("➡ No role advancement possible for this mention.\n")
 
             try:
                 await msg.add_reaction("👍")
@@ -122,7 +132,7 @@ class DailyRoleAssigner(commands.Cog):
 
         print(f"\n📊 Summary: {len(logged_users)} roles assigned.\n")
 
-        # ✅ Split embed safely
+        # ✅ Split embed safely if too long
         if logged_users:
             role1_users = [m.mention for m, r in logged_users if r.id == ROLE_ORDER[0]]
             role2_users = [m.mention for m, r in logged_users if r.id == ROLE_ORDER[1]]
@@ -130,7 +140,6 @@ class DailyRoleAssigner(commands.Cog):
             removed_users = [m.mention for m in removed_rollcall_users]
 
             all_sections = []
-
             if role1_users:
                 all_sections.append(("Role 1:", role1_users))
             if role2_users:
@@ -141,7 +150,6 @@ class DailyRoleAssigner(commands.Cog):
                 all_sections.append(("Roll Call Removed:", removed_users))
 
             def chunk_mentions(mentions, limit=1000):
-                """Split mentions list so each chunk fits safely."""
                 chunks = []
                 current = []
                 current_len = 0
@@ -158,13 +166,11 @@ class DailyRoleAssigner(commands.Cog):
                 return chunks
 
             embeds_to_send = []
-
             for name, mentions in all_sections:
                 chunks = chunk_mentions(mentions, limit=1000)
                 for i, chunk in enumerate(chunks, start=1):
                     embeds_to_send.append((f"{name} (Part {i})" if len(chunks) > 1 else name, chunk))
 
-            # Build embeds in 6000-character groups
             current_embed = discord.Embed(
                 title="Daily Role Log Summary",
                 description=f"{len(logged_users)} total roles assigned across logbooks.",
@@ -184,7 +190,7 @@ class DailyRoleAssigner(commands.Cog):
                     current_len = 0
                 current_embed.add_field(name=name, value=value, inline=False)
                 current_len += len(value)
-            
+
             if len(current_embed.fields) > 0:
                 current_embed.set_footer(text="Automated Logbook Bot")
                 await log_channel.send(embed=current_embed)
@@ -200,7 +206,7 @@ class DailyRoleAssigner(commands.Cog):
     @daily_task.before_loop
     async def before_daily_task(self):
         await self.bot.wait_until_ready()
-        print("✅ bot waiting for 09:00 KST run.")
+        print("✅ Bot ready. Waiting for 03:50 KST run.")
 
     @app_commands.command(
         name="log_roles", description="Manually run the daily role log"
